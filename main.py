@@ -1,7 +1,6 @@
 import pygame
 import pymunk
 import pymunk.pygame_util
-import numpy as np
 
 import time
 import random
@@ -9,7 +8,8 @@ import sys
 
 pygame.init()
 
-class Constants:
+class Constants: # Change stuff about the simulation here
+
     # display/pygame stuff
     size = (1200, 800)
 
@@ -20,11 +20,11 @@ class Constants:
     body_friction = 0.6
 
     # sim related stuff
-    bodies_N = 400
-    collision_iterations = 10 # Increasing this doesn't significantly help with errors
+    bodies_N = 500
+    collision_iterations = 30 # Increasing this doesn't significantly help with errors
     gravity_min_dist_sqrd = (2*body_radius)**2 # min distance squared where gravity will be applied
     gravity_max_dist_sqrd = 400**2 # max distance squared where gravity will be applied
-    per_frame = 2 # recalculate gravity every {per_frame} frames
+    per_frame = 3 # recalculate gravity every {per_frame} frames
     dt = 0.1
     G = 6e-5
 
@@ -60,18 +60,18 @@ def gravity(bodies):
 
     for i, b1 in enumerate(bodies):
         for j, b2 in enumerate(bodies[i + 1:]):
-            dist_sqrd = b1.position.get_dist_sqrd(b2.position)
+            diff_vec = b2.position - b1.position
+            dist_sqrd = diff_vec.dot(diff_vec) # faster than b1.position.get_dist_sqrd(b2.position)
 
             if (dist_sqrd < Constants.gravity_min_dist_sqrd or
                 dist_sqrd > Constants.gravity_max_dist_sqrd):
                 continue
 
-            diff_vec = b2.position - b1.position
 
             F_dir = diff_vec.normalized()
             F_mag = Constants.G*b1.mass*b2.mass/dist_sqrd
-
             F = F_dir*F_mag
+
             forces[i] += F
             forces[i + 1 + j] -= F
 
