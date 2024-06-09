@@ -12,6 +12,7 @@ class Constants: # Change stuff about the simulation here
 
     # display/pygame stuff
     size = (1200, 800)
+    per_frame_draw = 1 # redraw screen every {per_frame_draw} frames
 
     # body related stuff
     body_radius = 3
@@ -24,9 +25,14 @@ class Constants: # Change stuff about the simulation here
     collision_iterations = 30 # Increasing this doesn't significantly help with errors
     gravity_min_dist_sqrd = (2*body_radius)**2 # min distance squared where gravity will be applied
     gravity_max_dist_sqrd = 400**2 # max distance squared where gravity will be applied
-    per_frame = 3 # recalculate gravity every {per_frame} frames
+    per_frame_gravity = 3 # recalculate gravity every {per_frame_gravity} frames
     dt = 0.1
     G = 6e-5
+
+    # using a spatial hash didn't really improve performance, at least from what I tried
+    use_spatial_hash = False
+    spatial_hash_dim = 4*body_radius
+    spatial_hash_count = bodies_N*10
 
     # FUCKING ANGULAR VELOCITY
     # Main problem of the simulation, colliding bodies seem to increase their angular velocity continuously
@@ -53,9 +59,19 @@ def custom_post_solve(arbiter, space, data): # JUST FOR HANDLING ANGULAR VELOCIT
             else:
                 shape.body.angular_velocity = max(shape.body.angular_velocity, Constants.angular_cap)
 
-def gravity(bodies):
 
+def funky_gravity(bodies):
+    # This monstrocity is my attempt at using list comprehensions for gravity force calculations, by abusing the := operator
+    # which as it turns out is REALLY worse than the other method ( didn't continue it for this reason )
+
+    forces = [diff_vec.normalized()*Constants.G*b1.mass*b2.mass/dist_sqrd for b2 in bodies for b1 in bodies if
+              (dist_sqrd := (diff_vec := b2.position - b1.position).dot(diff_vec)) > Constants.gravity_min_dist_sqrd and
+              dist_sqrd < Constants.gravity_max_dist_sqrd]
+
+def gravity(bodies):
     # This gives the most performance out of all the things I tried
+    # using numpy doesn't help at all from what I tested, it even makes the performances worse by a lot
+
     forces = [pymunk.Vec2d.zero()]*Constants.bodies_N
 
     for i, b1 in enumerate(bodies):
@@ -67,7 +83,6 @@ def gravity(bodies):
                 dist_sqrd > Constants.gravity_max_dist_sqrd):
                 continue
 
-
             F_dir = diff_vec.normalized()
             F_mag = Constants.G*b1.mass*b2.mass/dist_sqrd
             F = F_dir*F_mag
@@ -75,10 +90,8 @@ def gravity(bodies):
             forces[i] += F
             forces[i + 1 + j] -= F
 
-        # this helps a bit with errors
+        # this instead of at local point helps a bit with errors
         b1.apply_force_at_world_point(forces[i], b1.position)
-
-
 
 class Simulator:
     def __init__(self):
@@ -100,6 +113,11 @@ class Simulator:
         self.space.iterations = Constants.collision_iterations
         handler = self.space.add_collision_handler(1, 1)
         handler.post_solve = custom_post_solve
+        if Constants.use_spatial_hash:
+            self.space.use_spatial_hash(
+                dim=Constants.spatial_hash_dim,
+                count=Constants.spatial_hash_count
+            )
 
         # make all the bodies
         for _ in range(Constants.bodies_N):
@@ -140,13 +158,15 @@ class Simulator:
                     (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE)):
                     running = False
 
-            if fps % Constants.per_frame == 0:
+            if total_frames % Constants.per_frame_gravity == 0:
                 self.gravity_func(self.bodies)
 
-            self._display.fill((0, 0, 0))
-            self.space.debug_draw(self._options)
+            if total_frames % Constants.per_frame_draw == 0:
+                self._display.fill((0, 0, 0))
+                self.space.debug_draw(self._options)
+                pygame.display.flip()
+
             self.space.step(Constants.dt)
-            pygame.display.update()
 
         return 0
 
