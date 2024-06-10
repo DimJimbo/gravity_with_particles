@@ -32,7 +32,7 @@ class Constants: # Change stuff about the simulation here
     body_friction = 0.6
 
     # sim related stuff
-    bodies_N = 100 # starting body amount
+    bodies_N = 400 # starting body amount
     collision_iterations = 20 # Increasing this doesn't significantly help with errors
     gravity_min_dist_sqrd = (2*body_radius)**2 # min distance squared where gravity will be applied
     gravity_max_dist_sqrd = 400**2 # max distance squared where gravity will be applied
@@ -163,6 +163,10 @@ class Simulator:
         for body in self.bodies:
             # Thank stack overflow, everything except for that + self.position_diplacement_vec is for zooming
             position = ((body.position - pymunk.Vec2d(*Constants.size)/2 + self.position_displacement_vec)*self.zoom_percent + pymunk.Vec2d(*Constants.size)/2)
+
+            # don't draw things outside the screen
+            if position.x > Constants.size[0] or position.x < 0 or position.y > Constants.size[1] or position.y < 0:
+                continue
             radius = (Constants.body_radius*self.zoom_percent)
             pygame.draw.circle(self._display, (255, 255, 255), position, radius)
 
