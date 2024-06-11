@@ -18,7 +18,9 @@ pygame.key.set_repeat(200, 50) # so multiple KEYDOWN events get sent ( ie holdin
 class Constants: # Change stuff about the simulation here
 
     # display/pygame stuff
-    size = (1200, 800)
+    fullscreen = False
+    size = (640, 800)
+
     per_frame_draw = 1 # redraw screen every {per_frame_draw} frames
     move_by = 20 # pixels
     zoom_by = 0.1 # percent
@@ -32,7 +34,7 @@ class Constants: # Change stuff about the simulation here
     body_friction = 0.6
 
     # sim related stuff
-    bodies_N = 400 # starting body amount
+    bodies_N = 100 # starting body amount
     collision_iterations = 20 # Increasing this doesn't significantly help with errors
     gravity_min_dist_sqrd = (2*body_radius)**2 # min distance squared where gravity will be applied
     gravity_max_dist_sqrd = 400**2 # max distance squared where gravity will be applied
@@ -83,7 +85,11 @@ def funky_gravity(bodies):
 class Simulator:
     def __init__(self):
 
-        self._display = pygame.display.set_mode(Constants.size)
+        if Constants.fullscreen:
+            self._display = pygame.display.set_mode(flags=pygame.FULLSCREEN)
+        else:
+            self._display = pygame.display.set_mode(Constants.size)
+        self._window_size_vec = pymunk.Vec2d(self._display.get_width(), self._display.get_height())
 
         self.space = pymunk.Space()
         self.bodies = []
@@ -111,7 +117,7 @@ class Simulator:
 
         # make all the bodies
         for _ in range(Constants.bodies_N):
-            position = (random.randint(0, Constants.size[0]), random.randint(0, Constants.size[1]))
+            position = (random.randint(0, self._display.get_width()), random.randint(0, self._display.get_height()))
 
             self.add_body(position)
 
@@ -162,10 +168,11 @@ class Simulator:
 
         for body in self.bodies:
             # Thank stack overflow, everything except for that + self.position_diplacement_vec is for zooming
-            position = ((body.position - pymunk.Vec2d(*Constants.size)/2 + self.position_displacement_vec)*self.zoom_percent + pymunk.Vec2d(*Constants.size)/2)
+            position = ((body.position - self._window_size_vec/2 + self.position_displacement_vec)*self.zoom_percent + self._window_size_vec/2)
 
             # don't draw things outside the screen
-            if position.x > Constants.size[0] or position.x < 0 or position.y > Constants.size[1] or position.y < 0:
+            if (position.x > self._window_size_vec.x or position.x < 0 or
+                position.y > self._window_size_vec.y or position.y < 0):
                 continue
             radius = (Constants.body_radius*self.zoom_percent)
             pygame.draw.circle(self._display, (255, 255, 255), position, radius)
@@ -199,7 +206,8 @@ class Simulator:
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     # 1 is left click, 3 is right click
                     if event.button == 1:
-                        position = pygame.mouse.get_pos() - self.position_displacement_vec # DONT FORGET THE DISPLACEMENT VECTOR!!!
+                        # just the inverse of the one at the _update_display function
+                        position = (pygame.mouse.get_pos() - self._window_size_vec/2)/self.zoom_percent + self._window_size_vec/2 - self.position_displacement_vec
                         self.add_body(position)
 
                 elif event.type == pygame.KEYDOWN:
