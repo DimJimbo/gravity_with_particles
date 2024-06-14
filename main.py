@@ -33,7 +33,7 @@ class Constants: # Change stuff about the simulation here
     zoom_by = 0.05 # percent
     min_zoom = 1/(2*body_radius) # point when round(body_radius*zoom_percent) is 0
     max_zoom = 100*zoom_by
-    starting_zoom = 0.5
+    starting_zoom = 1
 
     # sim related stuff
     bodies_N = 200 # starting body amount
@@ -152,11 +152,16 @@ class Simulator:
         # This gives the most performance out of all the things I tried
         # using numpy doesn't help at all from what I tested, it even makes the performances worse by a lot
 
-        forces = [pymunk.Vec2d.zero()]*len(bodies)
+        forces = [pymunk.Vec2d.zero()]*len(bodies) # this I think is faster than [pymunk.Vec2d.zero() for _ in range(len(bodies))]
+
+        # caching this actually has some impact on performance, not a lot tho
+        mass_sqrd = Constants.body_mass*Constants.body_mass
 
         for i, body1 in enumerate(bodies):
+            position1 = body1.position # caching this has a pretty substantial impact on performance
+
             for j, body2 in enumerate(bodies[i + 1:]):
-                diff_vec = body2.position - body1.position
+                diff_vec = body2.position - position1
                 dist_sqrd = diff_vec.dot(diff_vec)  # faster than b1.position.get_dist_sqrd(b2.position)
 
                 if (dist_sqrd < Constants.gravity_min_dist_sqrd or
@@ -164,14 +169,14 @@ class Simulator:
                     continue
 
                 F_dir = diff_vec.normalized()
-                F_mag = Constants.G*body1.mass*body2.mass/dist_sqrd
+                F_mag = Constants.G*mass_sqrd/dist_sqrd
                 F = F_dir*F_mag
 
                 forces[i] += F
                 forces[i + 1 + j] -= F
 
             # this instead of at local point helps a bit with errors
-            body1.apply_force_at_world_point(forces[i], body1.position)
+            body1.apply_force_at_world_point(forces[i], position1)
 
         # for i, body1 in enumerate(self.bodies):
         #     # this instead of at local point helps a bit with errors
