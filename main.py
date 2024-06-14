@@ -154,7 +154,7 @@ class Simulator:
 
         forces = [pymunk.Vec2d.zero()]*len(bodies) # this I think is faster than [pymunk.Vec2d.zero() for _ in range(len(bodies))]
 
-        # caching this actually has some impact on performance, not a lot tho
+        # since the mass of all particles is the same, this can be cached, although it doesnt have a major impact on performance
         mass_sqrd = Constants.body_mass*Constants.body_mass
 
         for i, body1 in enumerate(bodies):
@@ -187,6 +187,8 @@ class Simulator:
 
         self._display.fill((0, 0, 0))
 
+        radius = round(Constants.body_radius*self.zoom_percent) # since body_radius doesn't change, this can be cached, which also helps somewhat
+
         for body in self.bodies:
 
             position = self.get_display_position_from_pymunk_position(body.position)
@@ -196,7 +198,6 @@ class Simulator:
                 position.y > self._window_size_vec.y or position.y < 0):
                 continue
 
-            radius = round(Constants.body_radius*self.zoom_percent)
             pygame.draw.circle(self._display, (255, 255, 255), position, radius)
 
         pygame.display.update()
