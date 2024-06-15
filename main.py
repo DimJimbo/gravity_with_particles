@@ -66,6 +66,7 @@ class CustomBody(pymunk.Body): # for now its useless, later I may use it for add
         super().__init__(mass, moment)
 
 def custom_post_solve(arbiter, space, data): # JUST FOR HANDLING ANGULAR VELOCITY
+    # this function has next to no impact on performance, so don't try to optimize it
     for shape in arbiter.shapes:
         if Constants.dampen_angular_velocity:
             shape.body.angular_velocity *= Constants.angular_dampening
@@ -107,10 +108,15 @@ class Simulator:
 
     def get_display_position_from_pymunk_position(self, position):
         # Thank stack overflow, everything except for that + self.position_diplacement_vec is for zooming
+
+        # TODO: since position*self.zoom_percent is basically the only variable parameter, maybe the majority of this can be cached
+        # TODO: with the cached value changing when either zoom_percent or position_displacement_vec chnges
         return (position - self._window_size_vec/2 + self.position_displacement_vec)*self.zoom_percent + self._window_size_vec/2
+
     def get_pymunk_position_from_display_position(self, position):
         # just the inverse of the one at the _update_display function
         return (position - self._window_size_vec/2)/self.zoom_percent + self._window_size_vec/2 - self.position_displacement_vec
+
     def init_sim(self):
 
         # setup space
@@ -154,33 +160,37 @@ class Simulator:
 
         forces = [pymunk.Vec2d.zero()]*len(bodies) # this I think is faster than [pymunk.Vec2d.zero() for _ in range(len(bodies))]
 
-        # since the mass of all particles is the same, this can be cached, although it doesnt have a major impact on performance
-        mass_sqrd = Constants.body_mass*Constants.body_mass
+        # since the mass of all particles is the same, this can be cached, although it doesn't have a major impact on performance
+        G_mass_sqrd = Constants.G*Constants.body_mass*Constants.body_mass
 
-        for i, body1 in enumerate(bodies):
+        bodies_tmp = bodies.copy() # instead of doing bodies[i+1:] for the second loop
+        i = 0 # do this manually instead of enumerate to save the function call and generator
+        for body1 in bodies:
+            j = i
+            bodies_tmp.pop(0)
+
             position1 = body1.position # caching this has a pretty substantial impact on performance
-
-            for j, body2 in enumerate(bodies[i + 1:]):
+            for body2 in bodies_tmp:
+                j += 1
                 diff_vec = body2.position - position1
                 dist_sqrd = diff_vec.dot(diff_vec)  # faster than b1.position.get_dist_sqrd(b2.position)
 
-                if (dist_sqrd < Constants.gravity_min_dist_sqrd or
-                        dist_sqrd > Constants.gravity_max_dist_sqrd):
+                if dist_sqrd < Constants.gravity_min_dist_sqrd or dist_sqrd > Constants.gravity_max_dist_sqrd:
                     continue
 
                 F_dir = diff_vec.normalized()
-                F_mag = Constants.G*mass_sqrd/dist_sqrd
+                F_mag = G_mass_sqrd/dist_sqrd
                 F = F_dir*F_mag
 
                 forces[i] += F
-                forces[i + 1 + j] -= F
+                forces[j] -= F
+
 
             # this instead of at local point helps a bit with errors
             body1.apply_force_at_world_point(forces[i], position1)
 
-        # for i, body1 in enumerate(self.bodies):
-        #     # this instead of at local point helps a bit with errors
-        #     body1.apply_force_at_world_point(forces[i], body1.position)
+            i += 1
+
     def _update_display(self):
         # This helps a lot with performance, mainly bc its drawing simple circles instead of force arrows too
         # Also, only way to add zooming and panning to the sim
