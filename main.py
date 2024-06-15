@@ -157,21 +157,19 @@ class Simulator:
     def _basic_gravity(self, bodies):
         # This gives the most performance out of all the things I tried
         # using numpy doesn't help at all from what I tested, it even makes the performances worse by a lot
-
-        forces = [pymunk.Vec2d.zero()]*len(bodies) # this I think is faster than [pymunk.Vec2d.zero() for _ in range(len(bodies))]
+        N = len(bodies)
+        forces = [pymunk.Vec2d.zero()]*N # this I think is faster than [pymunk.Vec2d.zero() for _ in range(len(bodies))]
 
         # since the mass of all particles is the same, this can be cached, although it doesn't have a major impact on performance
         G_mass_sqrd = Constants.G*Constants.body_mass*Constants.body_mass
 
-        bodies_tmp = bodies.copy() # instead of doing bodies[i+1:] for the second loop
-        i = 0 # do this manually instead of enumerate to save the function call and generator
-        for body1 in bodies:
-            j = i
-            bodies_tmp.pop(0)
+        for i in range(N):
+            body1 = bodies[i]
 
             position1 = body1.position # caching this has a pretty substantial impact on performance
-            for body2 in bodies_tmp:
-                j += 1
+            for j in range(i, N):
+                body2 = bodies[j]
+
                 diff_vec = body2.position - position1
                 dist_sqrd = diff_vec.dot(diff_vec)  # faster than b1.position.get_dist_sqrd(b2.position)
 
