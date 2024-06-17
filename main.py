@@ -25,7 +25,7 @@ class Constants: # Change stuff about the simulation here
 
     # display/pygame stuff
     fullscreen = False
-    width = 1200
+    width = 1400
     height = 800
 
     per_frame_draw = 1 # redraw screen every {per_frame_draw} frames
@@ -33,14 +33,14 @@ class Constants: # Change stuff about the simulation here
     zoom_by = 0.05 # percent
     min_zoom = 1/(2*body_radius) # point when round(body_radius*zoom_percent) is 0
     max_zoom = 100*zoom_by
-    starting_zoom = 1
+    starting_zoom = 0.25
 
     # sim related stuff
-    bodies_N = 200 # starting body amount
+    bodies_N = 500 # starting body amount
 
     collision_iterations = 20 # Increasing this doesn't significantly help with errors
     gravity_min_dist_sqrd = (2*body_radius)**2 # min distance squared where gravity will be applied
-    gravity_max_dist_sqrd = 600**2 # max distance squared where gravity will be applied
+    gravity_max_dist_sqrd = 1500**2 # max distance squared where gravity will be applied
     per_frame_gravity = 5 # recalculate gravity every {per_frame_gravity} frames
     dt = 0.1
     G = 6e-5
@@ -95,16 +95,20 @@ class Simulator:
             self._display = pygame.display.set_mode((Constants.width, Constants.height))
         self._window_size_vec = pymunk.Vec2d(self._display.get_width(), self._display.get_height())
 
+        self.is_paused = False  # controls only the physics sim, not drawing
+        self.position_displacement_vec = pymunk.Vec2d(0, 0)  # change the origin of the simulation
+        self.zoom_percent = Constants.starting_zoom  # zoom in and out
+
         self.space = pymunk.Space()
         self.bodies = []
+        self.N = 0
 
         self.gravity_func = self._basic_gravity # for if I ever implement Barnes-Hut or any other method
 
-        self.is_paused = False # controls only the physics sim, not drawing
-        self.position_displacement_vec = pymunk.Vec2d(0, 0) # change the origin of the simulation
-        self.zoom_percent = Constants.starting_zoom # zoom in and out
-
         self.init_sim()
+
+        # display specific variables
+        self.body_display_radius = round(Constants.body_radius*self.zoom_percent) # body radius remains constant ( without zooming ) so why not
 
     def get_display_position_from_pymunk_position(self, position):
         # Thank stack overflow, everything except for that + self.position_diplacement_vec is for zooming
@@ -114,7 +118,7 @@ class Simulator:
         return (position - self._window_size_vec/2 + self.position_displacement_vec)*self.zoom_percent + self._window_size_vec/2
 
     def get_pymunk_position_from_display_position(self, position):
-        # just the inverse of the one at the _update_display function
+        # just the inverse of the get_display_position_from_pymunk_position function
         return (position - self._window_size_vec/2)/self.zoom_percent + self._window_size_vec/2 - self.position_displacement_vec
 
     def init_sim(self):
@@ -153,21 +157,22 @@ class Simulator:
 
         self.bodies.append(body)
         self.space.add(body, shape)
+        self.N += 1
 
     def _basic_gravity(self, bodies):
         # This gives the most performance out of all the things I tried
         # using numpy doesn't help at all from what I tested, it even makes the performances worse by a lot
-        N = len(bodies)
-        forces = [pymunk.Vec2d.zero()]*N # this I think is faster than [pymunk.Vec2d.zero() for _ in range(len(bodies))]
+
+        forces = [pymunk.Vec2d.zero()]*self.N # this I think is faster than [pymunk.Vec2d.zero() for _ in range(len(bodies))]
 
         # since the mass of all particles is the same, this can be cached, although it doesn't have a major impact on performance
         G_mass_sqrd = Constants.G*Constants.body_mass*Constants.body_mass
 
-        for i in range(N):
+        for i in range(self.N):
             body1 = bodies[i]
 
             position1 = body1.position # caching this has a pretty substantial impact on performance
-            for j in range(i, N):
+            for j in range(i, self.N):
                 body2 = bodies[j]
 
                 diff_vec = body2.position - position1
@@ -183,11 +188,8 @@ class Simulator:
                 forces[i] += F
                 forces[j] -= F
 
-
             # this instead of at local point helps a bit with errors
             body1.apply_force_at_world_point(forces[i], position1)
-
-            i += 1
 
     def _update_display(self):
         # This helps a lot with performance, mainly bc its drawing simple circles instead of force arrows too
@@ -195,10 +197,8 @@ class Simulator:
 
         self._display.fill((0, 0, 0))
 
-        radius = round(Constants.body_radius*self.zoom_percent) # since body_radius doesn't change, this can be cached, which also helps somewhat
-
-        for body in self.bodies:
-
+        for i in range(self.N):
+            body = self.bodies[i]
             position = self.get_display_position_from_pymunk_position(body.position)
 
             # don't draw things outside the screen
@@ -206,9 +206,12 @@ class Simulator:
                 position.y > self._window_size_vec.y or position.y < 0):
                 continue
 
-            pygame.draw.circle(self._display, (255, 255, 255), position, radius)
+            pygame.draw.circle(self._display, (255, 255, 255), position, self.body_display_radius)
 
         pygame.display.update()
+
+    def _update_body_display_radius(self):
+        self.body_display_radius = round(Constants.body_radius*self.zoom_percent)
 
     def start(self):
 
@@ -255,8 +258,10 @@ class Simulator:
 
                     elif event.key == pygame.K_q and self.zoom_percent - Constants.zoom_by > Constants.min_zoom:
                         self.zoom_percent -= Constants.zoom_by
+                        self._update_body_display_radius()
                     elif event.key == pygame.K_e and self.zoom_percent + Constants.zoom_by < Constants.max_zoom:
                         self.zoom_percent += Constants.zoom_by
+                        self._update_body_display_radius()
 
             if not self.is_paused:
                 if total_frames % Constants.per_frame_gravity == 0:
