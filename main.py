@@ -5,7 +5,6 @@ import pymunk.pygame_util
 import time
 import random
 import sys
-import multiprocessing as mp
 
 pygame.init()
 pygame.key.set_repeat(200, 50) # so multiple KEYDOWN events get sent ( ie holding down a key works )
@@ -24,7 +23,7 @@ class Constants: # Change stuff about the simulation here
     body_friction = 0.6
 
     # display/pygame stuff
-    fullscreen = False
+    fullscreen = True
     width = 1400
     height = 800
 
@@ -33,15 +32,16 @@ class Constants: # Change stuff about the simulation here
     zoom_by = 0.05 # percent
     min_zoom = 1/(2*body_radius) # point when round(body_radius*zoom_percent) is 0
     max_zoom = 100*zoom_by
-    starting_zoom = 0.25
+    starting_zoom = 0.33
+    increase_dt_by = 0.01
 
     # sim related stuff
-    bodies_N = 500 # starting body amount
+    bodies_N = 300 # starting body amount
 
     collision_iterations = 20 # Increasing this doesn't significantly help with errors
     gravity_min_dist_sqrd = (2*body_radius)**2 # min distance squared where gravity will be applied
     gravity_max_dist_sqrd = 1500**2 # max distance squared where gravity will be applied
-    per_frame_gravity = 5 # recalculate gravity every {per_frame_gravity} frames
+    per_frame_gravity = 2 # recalculate gravity every {per_frame_gravity} frames
     dt = 0.1
     G = 6e-5
 
@@ -53,7 +53,9 @@ class Constants: # Change stuff about the simulation here
     # FUCKING ANGULAR VELOCITY
     # Main problem of the simulation, colliding bodies seem to increase their angular velocity continuously
     # Haven't found a fix yet, as I believe its due to numerical errors ( increasing collision iterations doesn't help
-    # as the problem persists unchanged even if they're cranked to 100-200 ), only thing to be done are these
+    # as the problem persists even if they're cranked to 100-200 )
+    # also increasing dt past ~0.15 results in lots of error
+    # Only thing I could come up with are these
     dampen_angular_velocity = True # dampen angular velocity every collision, so it eventually goes to 0
     angular_dampening = 0.95
     cap_angular_velocity = True # cap the angular velocity a body can have
@@ -65,20 +67,8 @@ class CustomBody(pymunk.Body): # for now its useless, later I may use it for add
         moment = pymunk.moment_for_circle(mass, 0, Constants.body_radius)
         super().__init__(mass, moment)
 
-def custom_post_solve(arbiter, space, data): # JUST FOR HANDLING ANGULAR VELOCITY
-    # this function has next to no impact on performance, so don't try to optimize it
-    for shape in arbiter.shapes:
-        if Constants.dampen_angular_velocity:
-            shape.body.angular_velocity *= Constants.angular_dampening
-        if Constants.cap_angular_velocity:
-            if shape.body.angular_velocity >= 0:
-                shape.body.angular_velocity = min(shape.body.angular_velocity, Constants.angular_cap)
-            else:
-                shape.body.angular_velocity = max(shape.body.angular_velocity, Constants.angular_cap)
-
-
 def funky_gravity(bodies):
-    # This monstrocity is my attempt at using list comprehensions for gravity force calculations, by abusing the := operator
+    # This monstrosity is my attempt at using list comprehensions for gravity force calculations, by abusing the := operator
     # which as it turns out is REALLY worse than the other method ( didn't continue it for this reason )
 
     forces = [diff_vec.normalized()*Constants.G*b1.mass*b2.mass/dist_sqrd for b2 in bodies for b1 in bodies if
@@ -89,37 +79,63 @@ def funky_gravity(bodies):
 class Simulator:
     def __init__(self):
 
+        # physics things
+        self.is_paused = False  # controls only the physics sim, not drawing
+
+        self.space = pymunk.Space()
+        self.bodies = []
+        self.N = 0
+        self.dt = Constants.dt
+        self.fps = 0
+        self.collisions = 0 # counter for total collisions per frame
+
+        self.gravity_func = self._basic_gravity # for if I ever implement Barnes-Hut or any other method
+
+        # display things
         if Constants.fullscreen:
             self._display = pygame.display.set_mode(flags=pygame.FULLSCREEN)
         else:
             self._display = pygame.display.set_mode((Constants.width, Constants.height))
         self._window_size_vec = pymunk.Vec2d(self._display.get_width(), self._display.get_height())
 
-        self.is_paused = False  # controls only the physics sim, not drawing
         self.position_displacement_vec = pymunk.Vec2d(0, 0)  # change the origin of the simulation
         self.zoom_percent = Constants.starting_zoom  # zoom in and out
+        self.body_display_radius = round(Constants.body_radius*self.zoom_percent) # used in _update_display for bodies, updated every zoom event
 
-        self.space = pymunk.Space()
-        self.bodies = []
-        self.N = 0
-
-        self.gravity_func = self._basic_gravity # for if I ever implement Barnes-Hut or any other method
+        self.font = pygame.font.SysFont('freesans', 15)
 
         self.init_sim()
 
-        # display specific variables
-        self.body_display_radius = round(Constants.body_radius*self.zoom_percent) # body radius remains constant ( without zooming ) so why not
-
     def get_display_position_from_pymunk_position(self, position):
-        # Thank stack overflow, everything except for that + self.position_diplacement_vec is for zooming
+        # Thank stack overflow, everything except for that + self.position_displacement_vec is for zooming
 
         # TODO: since position*self.zoom_percent is basically the only variable parameter, maybe the majority of this can be cached
-        # TODO: with the cached value changing when either zoom_percent or position_displacement_vec chnges
+        # TODO: with the cached value changing when either zoom_percent or position_displacement_vec changes
         return (position - self._window_size_vec/2 + self.position_displacement_vec)*self.zoom_percent + self._window_size_vec/2
 
     def get_pymunk_position_from_display_position(self, position):
         # just the inverse of the get_display_position_from_pymunk_position function
         return (position - self._window_size_vec/2)/self.zoom_percent + self._window_size_vec/2 - self.position_displacement_vec
+
+    def _update_body_display_radius(self):
+        self.body_display_radius = round(Constants.body_radius*self.zoom_percent)
+
+    def custom_begin(self, arbiter, space, data): # just to set self.collisions to 0
+        self.collisions = 0
+        return True
+
+    def custom_post_solve(self, arbiter, space, data):  # JUST FOR HANDLING ANGULAR VELOCITY
+        # this function has next to no impact on performance, so don't try to optimize it
+        for shape in arbiter.shapes:
+            if Constants.dampen_angular_velocity:
+                shape.body.angular_velocity *= Constants.angular_dampening
+            if Constants.cap_angular_velocity:
+                if shape.body.angular_velocity >= 0:
+                    shape.body.angular_velocity = min(shape.body.angular_velocity, Constants.angular_cap)
+                else:
+                    shape.body.angular_velocity = max(shape.body.angular_velocity, Constants.angular_cap)
+
+            self.collisions += 1
 
     def init_sim(self):
 
@@ -128,23 +144,22 @@ class Simulator:
         self.space.iterations = Constants.collision_iterations
 
         handler = self.space.add_collision_handler(1, 1)
-        handler.post_solve = custom_post_solve
+        handler.post_solve = self.custom_post_solve
+        handler.begin = self.custom_begin
         if Constants.use_spatial_hash:
             self.space.use_spatial_hash(
                 dim=Constants.spatial_hash_dim,
                 count=Constants.spatial_hash_count
             )
 
-
         # make all the bodies
         for _ in range(Constants.bodies_N):
             # coordinates of body, based on screen dimensions
-            x = random.randint(0, Constants.width)
-            y = random.randint(0, Constants.height)
+            x = random.randint(0, int(self._window_size_vec.x))
+            y = random.randint(0, int(self._window_size_vec.y))
 
             position = self.get_pymunk_position_from_display_position(pymunk.Vec2d(x, y)) # to work with different starting zoom levels
             self.add_body(position)
-
 
     def add_body(self, position):
         body = CustomBody(Constants.body_mass)
@@ -165,7 +180,7 @@ class Simulator:
 
         forces = [pymunk.Vec2d.zero()]*self.N # this I think is faster than [pymunk.Vec2d.zero() for _ in range(len(bodies))]
 
-        # since the mass of all particles is the same, this can be cached, although it doesn't have a major impact on performance
+        # since the mass of all bodies is the same, this can be cached, although it doesn't have a major impact on performance
         G_mass_sqrd = Constants.G*Constants.body_mass*Constants.body_mass
 
         for i in range(self.N):
@@ -191,6 +206,37 @@ class Simulator:
             # this instead of at local point helps a bit with errors
             body1.apply_force_at_world_point(forces[i], position1)
 
+
+    def _update_UI(self):
+
+        # coordinates here are display coordinates
+
+        height_offset = 10
+
+        fps_text = self.font.render('FPS: {}'.format(self.fps), True, (255, 255, 255))
+        fps_text.set_colorkey((0, 0, 0))
+        self._display.blit(fps_text, fps_text.get_rect().move(10, height_offset))
+
+
+        height_offset += 5 + fps_text.get_height()
+        body_N_text = self.font.render('{} Bodies'.format(self.N), True, (255, 255, 255))
+        body_N_text.set_colorkey((0, 0, 0))
+        self._display.blit(body_N_text, body_N_text.get_rect().move(10, height_offset))
+
+        height_offset += 5 + body_N_text.get_height()
+
+        dt_text = self.font.render('dt: {}'.format(self.dt), True, (255, 255, 255))
+        dt_text.set_colorkey((0, 0, 0))
+        self._display.blit(dt_text, dt_text.get_rect().move(10, height_offset))
+
+        height_offset += 5 + body_N_text.get_height()
+
+        # collision_N_text = self.font.render('Collisions: {}'.format(self.collisions), True, (255, 255, 255))
+        # collision_N_text.set_colorkey((0, 0, 0))
+        # self._display.blit(collision_N_text, collision_N_text.get_rect().move(10, height_offset))
+
+
+
     def _update_display(self):
         # This helps a lot with performance, mainly bc its drawing simple circles instead of force arrows too
         # Also, only way to add zooming and panning to the sim
@@ -208,27 +254,25 @@ class Simulator:
 
             pygame.draw.circle(self._display, (255, 255, 255), position, self.body_display_radius)
 
+        self._update_UI()
         pygame.display.update()
-
-    def _update_body_display_radius(self):
-        self.body_display_radius = round(Constants.body_radius*self.zoom_percent)
 
     def start(self):
 
         total_frames = 0
-        fps = 0
+        current_frames = 0
 
         t_start = time.time()
         t0 = t_start
 
         running = True
         while running:
-            fps += 1
+            current_frames += 1
             total_frames += 1
 
             if time.time() - t0 >= 1:
-                print('fps:', fps)
-                fps = 0
+                self.fps = current_frames
+                current_frames = 0
                 t0 = time.time()
 
 
@@ -263,11 +307,16 @@ class Simulator:
                         self.zoom_percent += Constants.zoom_by
                         self._update_body_display_radius()
 
+                    elif event.key == pygame.K_k:
+                        self.dt = round(self.dt - Constants.increase_dt_by, 3)
+                    elif event.key == pygame.K_l:
+                        self.dt = round(self.dt + Constants.increase_dt_by, 3)
+
             if not self.is_paused:
                 if total_frames % Constants.per_frame_gravity == 0:
                     self.gravity_func(self.bodies)
 
-                self.space.step(Constants.dt)
+                self.space.step(self.dt)
 
             if total_frames % Constants.per_frame_draw == 0:
                 self._update_display()
