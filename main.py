@@ -1,6 +1,6 @@
 import pygame
+import pygame.gfxdraw
 import pymunk
-import pymunk.pygame_util
 
 import time
 import random
@@ -13,37 +13,42 @@ pygame.key.set_repeat(200, 50) # so multiple KEYDOWN events get sent ( ie holdin
 # MOVE: WASD
 # ZOOM IN/OUT: Q/E
 # PAUSE SIMULATION: P
+# INCREASE/DECREASE dt: L/K
+# ADD A BODY TO MOUSE POSITION: RMB
 
 class Constants: # Change stuff about the simulation here
 
     # body related stuff
     body_radius = 4
     body_mass = 1e6
-    body_elasticity = 0.8
-    body_friction = 0.6
+    body_elasticity = 0.2
+    body_friction = 0.8
 
     # display/pygame stuff
     fullscreen = True
-    width = 1400
+    width = 1200
     height = 800
 
-    per_frame_draw = 1 # redraw screen every {per_frame_draw} frames
     move_by = 20 # pixels
-    zoom_by = 0.05 # percent
+    zoom_by = 0.01 # percent
     min_zoom = 1/(2*body_radius) # point when round(body_radius*zoom_percent) is 0
     max_zoom = 100*zoom_by
-    starting_zoom = 0.33
+    starting_zoom = 0.4
     increase_dt_by = 0.01
 
     # sim related stuff
-    bodies_N = 300 # starting body amount
+    bodies_N = 500 # starting body amount
 
-    collision_iterations = 20 # Increasing this doesn't significantly help with errors
-    gravity_min_dist_sqrd = (2*body_radius)**2 # min distance squared where gravity will be applied
-    gravity_max_dist_sqrd = 1500**2 # max distance squared where gravity will be applied
-    per_frame_gravity = 2 # recalculate gravity every {per_frame_gravity} frames
-    dt = 0.1
     G = 6e-5
+    collision_iterations = 20 # Increasing this doesn't significantly help with errors
+    minimum_force = 10  # minimum force that is registered (in N)
+    gravity_min_dist = 2*body_radius # min distance squared where gravity will be applied
+    gravity_min_dist_sqrd = gravity_min_dist**2
+    gravity_max_dist = (G*body_mass*body_mass/minimum_force)**0.5 # max distance squared where gravity will be applied
+    gravity_max_dist_sqrd = gravity_max_dist**2
+    per_frame_gravity = 5 # recalculate gravity every {per_frame_gravity} frames
+    dt = 0.1
+
 
     # using a spatial hash didn't really improve performance, at least from what I tried
     use_spatial_hash = False
@@ -87,7 +92,8 @@ class Simulator:
         self.N = 0
         self.dt = Constants.dt
         self.fps = 0
-        self.collisions = 0 # counter for total collisions per frame
+        self.sim_time = 0
+        self.real_time = 0
 
         self.gravity_func = self._basic_gravity # for if I ever implement Barnes-Hut or any other method
 
@@ -103,6 +109,9 @@ class Simulator:
         self.body_display_radius = round(Constants.body_radius*self.zoom_percent) # used in _update_display for bodies, updated every zoom event
 
         self.font = pygame.font.SysFont('freesans', 15)
+        self.draw_UI = True
+
+        self.draw_func = self._gfxdraw_bodies
 
         self.init_sim()
 
@@ -120,11 +129,7 @@ class Simulator:
     def _update_body_display_radius(self):
         self.body_display_radius = round(Constants.body_radius*self.zoom_percent)
 
-    def custom_begin(self, arbiter, space, data): # just to set self.collisions to 0
-        self.collisions = 0
-        return True
-
-    def custom_post_solve(self, arbiter, space, data):  # JUST FOR HANDLING ANGULAR VELOCITY
+    def _custom_post_solve(self, arbiter, space, data):  # JUST FOR HANDLING ANGULAR VELOCITY
         # this function has next to no impact on performance, so don't try to optimize it
         for shape in arbiter.shapes:
             if Constants.dampen_angular_velocity:
@@ -135,8 +140,6 @@ class Simulator:
                 else:
                     shape.body.angular_velocity = max(shape.body.angular_velocity, Constants.angular_cap)
 
-            self.collisions += 1
-
     def init_sim(self):
 
         # setup space
@@ -144,8 +147,7 @@ class Simulator:
         self.space.iterations = Constants.collision_iterations
 
         handler = self.space.add_collision_handler(1, 1)
-        handler.post_solve = self.custom_post_solve
-        handler.begin = self.custom_begin
+        handler.post_solve = self._custom_post_solve
         if Constants.use_spatial_hash:
             self.space.use_spatial_hash(
                 dim=Constants.spatial_hash_dim,
@@ -185,63 +187,66 @@ class Simulator:
 
         for i in range(self.N):
             body1 = bodies[i]
-
+            sum = pymunk.Vec2d.zero()
             position1 = body1.position # caching this has a pretty substantial impact on performance
             for j in range(i, self.N):
-                body2 = bodies[j]
-
-                diff_vec = body2.position - position1
-                dist_sqrd = diff_vec.dot(diff_vec)  # faster than b1.position.get_dist_sqrd(b2.position)
-
-                if dist_sqrd < Constants.gravity_min_dist_sqrd or dist_sqrd > Constants.gravity_max_dist_sqrd:
+                # both getting the distance (with length) or squared distance (with dot) and
+                # changing this function accordingly have the same impact on performance surprisingly
+                # getting the distance is simpler and more clear though
+                diff_vec = bodies[j].position - position1
+                dist = diff_vec.length
+                if dist < Constants.gravity_min_dist or dist > Constants.gravity_max_dist:
                     continue
 
-                F_dir = diff_vec.normalized()
-                F_mag = G_mass_sqrd/dist_sqrd
-                F = F_dir*F_mag
+                F_dir = diff_vec/dist
+                F_mag = G_mass_sqrd/(dist*dist)
+                F = F_mag*F_dir
 
-                forces[i] += F
+                sum += F
                 forces[j] -= F
 
             # this instead of at local point helps a bit with errors
-            body1.apply_force_at_world_point(forces[i], position1)
+            body1.apply_force_at_world_point(forces[i] + sum, position1)
 
 
-    def _update_UI(self):
+    def _draw_UI(self):
 
         # coordinates here are display coordinates
 
-        height_offset = 10
+        left_height_offset = 10
 
         fps_text = self.font.render('FPS: {}'.format(self.fps), True, (255, 255, 255))
         fps_text.set_colorkey((0, 0, 0))
-        self._display.blit(fps_text, fps_text.get_rect().move(10, height_offset))
+        self._display.blit(fps_text, fps_text.get_rect().move(10, left_height_offset))
 
 
-        height_offset += 5 + fps_text.get_height()
+        left_height_offset += 5 + fps_text.get_height()
         body_N_text = self.font.render('{} Bodies'.format(self.N), True, (255, 255, 255))
         body_N_text.set_colorkey((0, 0, 0))
-        self._display.blit(body_N_text, body_N_text.get_rect().move(10, height_offset))
+        self._display.blit(body_N_text, body_N_text.get_rect().move(10, left_height_offset))
 
-        height_offset += 5 + body_N_text.get_height()
+        left_height_offset += 5 + body_N_text.get_height()
 
-        dt_text = self.font.render('dt: {}'.format(self.dt), True, (255, 255, 255))
+        dt_text = self.font.render('dt: {}s, Sim Time: {}s, Real Time: {}s'.format(self.dt, self.sim_time, self.real_time), True, (255, 255, 255))
         dt_text.set_colorkey((0, 0, 0))
-        self._display.blit(dt_text, dt_text.get_rect().move(10, height_offset))
+        self._display.blit(dt_text, dt_text.get_rect().move(10, left_height_offset))
 
-        height_offset += 5 + body_N_text.get_height()
+        left_height_offset += 5 + dt_text.get_height()
 
-        # collision_N_text = self.font.render('Collisions: {}'.format(self.collisions), True, (255, 255, 255))
-        # collision_N_text.set_colorkey((0, 0, 0))
-        # self._display.blit(collision_N_text, collision_N_text.get_rect().move(10, height_offset))
+        right_height_offset = 5
+        zoom_text = self.font.render('zoom: {} %'.format(int(self.zoom_percent*100)), True, (255, 255, 255))
+        zoom_text.set_colorkey((0, 0, 0))
+        self._display.blit(zoom_text, zoom_text.get_rect().move(self._window_size_vec.x - zoom_text.get_width() - 10, right_height_offset))
+
+        right_height_offset += 5 + zoom_text.get_height()
 
 
 
-    def _update_display(self):
+
+
+    def _draw_bodies(self):
         # This helps a lot with performance, mainly bc its drawing simple circles instead of force arrows too
         # Also, only way to add zooming and panning to the sim
-
-        self._display.fill((0, 0, 0))
 
         for i in range(self.N):
             body = self.bodies[i]
@@ -254,8 +259,20 @@ class Simulator:
 
             pygame.draw.circle(self._display, (255, 255, 255), position, self.body_display_radius)
 
-        self._update_UI()
-        pygame.display.update()
+    def _gfxdraw_bodies(self):
+        # same as _draw_bodies but optimised to use gfxdraw instead of draw, which is a bit faster
+        # the filled circles of gfxdraw are not good though
+
+        for i in range(self.N):
+            body = self.bodies[i]
+            x, y = self.get_display_position_from_pymunk_position(body.position).int_tuple
+
+            # don't draw things outside the screen
+            if (x > self._window_size_vec.x or x < 0 or
+                y > self._window_size_vec.y or y < 0):
+                continue
+
+            pygame.gfxdraw.filled_circle(self._display, x, y, self.body_display_radius, (255, 255,255))
 
     def start(self):
 
@@ -272,6 +289,7 @@ class Simulator:
 
             if time.time() - t0 >= 1:
                 self.fps = current_frames
+                self.real_time += 1
                 current_frames = 0
                 t0 = time.time()
 
@@ -312,14 +330,23 @@ class Simulator:
                     elif event.key == pygame.K_l:
                         self.dt = round(self.dt + Constants.increase_dt_by, 3)
 
+                    elif event.key == pygame.K_h:
+                        self.draw_UI = not self.draw_UI
+
             if not self.is_paused:
                 if total_frames % Constants.per_frame_gravity == 0:
                     self.gravity_func(self.bodies)
-
                 self.space.step(self.dt)
 
-            if total_frames % Constants.per_frame_draw == 0:
-                self._update_display()
+            self._display.fill((0, 0, 0))
+
+            self.draw_func()
+            if self.draw_UI:
+                self._draw_UI()
+
+            pygame.display.update()
+
+            self.sim_time = round(self.sim_time + self.dt, 3)
 
         return 0
 
