@@ -37,7 +37,7 @@ class Constants: # Change stuff about the simulation here
     increase_dt_by = 0.01
 
     # sim related stuff
-    bodies_N = 200 # starting body amount
+    bodies_N = 500 # starting body amount
 
     G = 6e-5
     collision_iterations = 20 # Increasing this doesn't significantly help with errors
@@ -46,7 +46,7 @@ class Constants: # Change stuff about the simulation here
     gravity_min_dist_sqrd = gravity_min_dist**2
     gravity_max_dist = (G*body_mass*body_mass/minimum_force)**0.5 # max distance squared where gravity will be applied
     gravity_max_dist_sqrd = gravity_max_dist**2
-    per_frame_gravity = 4 # recalculate gravity every {per_frame_gravity} frames
+    per_frame_gravity = 5 # recalculate gravity every {per_frame_gravity} frames
     dt = 0.1
 
 
@@ -157,8 +157,8 @@ class Simulator:
         # make all the bodies
         for _ in range(Constants.bodies_N):
             # coordinates of body, based on screen dimensions
-            x = int(random.triangular(0, self._window_size_vec.x, self._window_size_vec.x//2))
-            y = int(random.triangular(0, self._window_size_vec.y, self._window_size_vec.y//2))
+            x = random.randint(0, int(self._window_size_vec.x))
+            y = random.randint(0, int(self._window_size_vec.y))
 
             position = self.get_pymunk_position_from_display_position(pymunk.Vec2d(x, y)) # to work with different starting zoom levels
             self.add_body(position)
@@ -195,18 +195,18 @@ class Simulator:
                 # getting the distance is simpler and more clear though
                 diff_vec = bodies[j].position - position1
                 dist = diff_vec.length
-                if Constants.gravity_min_dist <= dist <= Constants.gravity_max_dist:
+                if dist < Constants.gravity_min_dist or dist > Constants.gravity_max_dist:
+                    continue
 
-                    F_dir = diff_vec/dist
-                    F_mag = G_mass_sqrd/(dist*dist)
-                    F = F_mag*F_dir
+                F_dir = diff_vec/dist
+                F_mag = G_mass_sqrd/(dist*dist)
+                F = F_mag*F_dir
 
-                    sum += F
-                    forces[j] -= F
+                sum += F
+                forces[j] -= F
 
             # this instead of at local point helps a bit with errors
             body1.apply_force_at_world_point(forces[i] + sum, position1)
-
 
 
     def _draw_UI(self):
@@ -239,6 +239,10 @@ class Simulator:
         self._display.blit(zoom_text, zoom_text.get_rect().move(self._window_size_vec.x - zoom_text.get_width() - 10, right_height_offset))
 
         right_height_offset += 5 + zoom_text.get_height()
+
+
+
+
 
     def _draw_bodies(self):
         # This helps a lot with performance, mainly bc its drawing simple circles instead of force arrows too
