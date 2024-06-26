@@ -1,5 +1,7 @@
 import pygame
 import pygame.gfxdraw
+import math
+
 import pymunk
 
 import time
@@ -25,9 +27,9 @@ class Constants: # Change stuff about the simulation here
     body_friction = 0.8
 
     # display/pygame stuff
-    fullscreen = True
-    width = 1200
-    height = 800
+    fullscreen = False
+    width = 850
+    height = 850
 
     move_by = 20 # pixels
     zoom_by = 0.01 # percent
@@ -37,7 +39,7 @@ class Constants: # Change stuff about the simulation here
     increase_dt_by = 0.01
 
     # sim related stuff
-    bodies_N = 500 # starting body amount
+    bodies_N = 700 # starting body amount
 
     G = 6e-5
     collision_iterations = 20 # Increasing this doesn't significantly help with errors
@@ -93,7 +95,7 @@ class Simulator:
         self.dt = Constants.dt
         self.fps = 0
         self.sim_time = 0
-        self.real_time = 0
+        self.sim_start_time = None
 
         self.gravity_func = self._basic_gravity # for if I ever implement Barnes-Hut or any other method
 
@@ -161,11 +163,13 @@ class Simulator:
             y = random.randint(0, int(self._window_size_vec.y))
 
             position = self.get_pymunk_position_from_display_position(pymunk.Vec2d(x, y)) # to work with different starting zoom levels
+
             self.add_body(position)
 
-    def add_body(self, position):
+    def add_body(self, position, force = pymunk.Vec2d.zero()):
         body = CustomBody(Constants.body_mass)
         body.position = position
+        body.apply_impulse_at_world_point(force, body.position)
 
         shape = pymunk.Circle(body, radius=Constants.body_radius)
         shape.elasticity = Constants.body_elasticity
@@ -227,7 +231,8 @@ class Simulator:
 
         left_height_offset += 5 + body_N_text.get_height()
 
-        dt_text = self.font.render('dt: {}s, Sim Time: {}s, Real Time: {}s'.format(self.dt, self.sim_time, self.real_time), True, (255, 255, 255))
+        time_info = 'dt: {}s, Sim Time: {}s, Real Time: {}s'.format(self.dt, self.sim_time, round(time.time() - self.sim_start_time, 2))
+        dt_text = self.font.render(time_info, True, (255, 255, 255))
         dt_text.set_colorkey((0, 0, 0))
         self._display.blit(dt_text, dt_text.get_rect().move(10, left_height_offset))
 
@@ -279,17 +284,16 @@ class Simulator:
         total_frames = 0
         current_frames = 0
 
-        t_start = time.time()
-        t0 = t_start
+        self.sim_start_time = time.time()
+        t0 = self.sim_start_time
 
         running = True
         while running:
             current_frames += 1
             total_frames += 1
-
-            if time.time() - t0 >= 1:
+            t_diff = time.time() - t0
+            if t_diff >= 1:
                 self.fps = current_frames
-                self.real_time += 1
                 current_frames = 0
                 t0 = time.time()
 
